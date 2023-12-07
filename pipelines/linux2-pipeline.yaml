@@ -1,0 +1,147 @@
+trigger: none
+
+## Global variables
+variables:
+  - template: /ADO-GoldenAMI/Linux-AMI/variables/variables.yml
+
+parameters:
+- name: pool
+  default: "SYA-LINUX"
+  values:
+    - SYA-LINUX
+    - SYA-LINUXBETA
+
+resources:
+  repositories:
+    - repository: Container-Based-YAML-Pipelines
+      type: git
+      name: DevOps Automation/Container-Based-YAML-Pipelines
+
+stages:
+- stage: DEV
+  displayName: DevOps-Dev AMI
+  jobs:
+    - template: /DevOps-LINUX-Ubuntu/SYA-LINUX-UBUNTU.yaml@Container-Based-YAML-Pipelines
+    - job: 'Containerized_Build'
+      dependsOn: 'Artifactory_Container_Pull'
+      condition: eq(variables['environment'], 'dev')
+      continueOnError: false
+      displayName: 'Creating DEV LINUX2 AMI'
+      pool:
+        name: ${{ parameters.pool }}
+      steps:
+      - template: /ADO-GoldenAMI/Linux-AMI/templates/linux2.yaml
+
+- stage: INT
+  displayName: DevOps-Int AMI
+  jobs:
+    - template: /DevOps-LINUX-Ubuntu/SYA-LINUX-UBUNTU.yaml@Container-Based-YAML-Pipelines
+    - job: 'Containerized_Build'
+      dependsOn: 'Artifactory_Container_Pull'
+      condition: eq(variables['environment'], 'int')
+      continueOnError: false
+      displayName: 'Creating INT LINUX2 AMI'
+      pool:
+        name: ${{ parameters.pool }}
+      steps:
+      - template: /ADO-GoldenAMI/Linux-AMI/templates/linux2.yaml
+
+- stage: prePRD
+  displayName: PREPRD STAGE
+  pool:
+    name: DevOps
+  jobs: 
+    - job: UpdateCRChangeWindow
+      steps:
+      - bash: |
+          START_TIME=$(date '+%FT%TZ')
+          END_TIME=$(date -d '+1 hour' '+%FT%TZ')
+          SCAN_DAY=$(date '+%m-%d-%Y')
+          curl -fL -XPUT -H "Authorization:Bearer $(System.AccessToken)" -H "Content-Type:application/json" \
+          -d '{
+            "id": "$(VarGroupId)",
+            "type": "Vsts",
+            "name": "$(VarGroupName)",
+            "variables": {
+              "StartDateTime": {
+                "isSecret": false,
+                "value": "'"$START_TIME"'"
+              },
+              "EndDateTime": {
+                "isSecret": false,
+                "value": "'"$END_TIME"'"
+              },
+              "FortifyScanDate": {
+                "isSecret": false,
+                "value": "'"$SCAN_DAY"'"
+              }
+            }
+          }' \
+          $(System.TeamFoundationCollectionUri)$(urlFriendlyTeamProject)/_apis/distributedtask/variablegroups/$(VarGroupId)?api-version=5.0-preview.1
+        displayName: 'Set variables in variable group for CR change window'
+
+- stage: PRD
+  displayName: DevOps-Prd AMI
+  condition: eq(variables['environment'], 'prd')
+  dependsOn: prePRD
+  pool:
+    name: DevOps
+  jobs:
+    - deployment: PrdDeployment
+      displayName: 'Creating PRD LINUX2 AMI'
+      environment:  prdCreateLinux2AMI
+      continueOnError: false
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - template: /ADO-GoldenAMI/Linux-AMI/templates/linux2.yaml
+
+              - bash: |
+                    PROJECTNAME="$(System.TeamProject)"
+                    url="$(System.TeamFoundationCollectionUri)${PROJECTNAME// /%20}/_apis/build/builds/$(Build.BuildId)?api-version=2.0"
+                    curl -fL -XPATCH -H "Authorization:Bearer $(System.AccessToken)" -H "Content-Type:application/json" \
+                    -d '{
+                        "keepforever":true
+                    }' $url
+                displayName: 'Keep this build indefinitely'
+
+##### Cancel if failed deployment
+    - job: UpdateFailedChangeRequest
+      displayName: Cancel Failed Change Request in ServiceNow
+      pool: server
+      dependsOn: PrdDeployment
+      condition: failed()
+      steps:
+        - task: UpdateServiceNowChangeRequest@2
+          inputs:
+            ServiceNowConnection: 'ServiceNow PRD'
+            NewStatus: '4'
+            CloseCode: 'canceled'
+            CloseNotes: 'Deployment Failed'
+            otherParameters: '{"u_close_code":"canceled","u_close_notes":"Deployment failed","u_state":"4"}'
+
+##### Successful deployment
+    - job: UpdateSuccessfulChangeRequest
+      displayName: Close Change Request in ServiceNow
+      pool: server
+      dependsOn: PrdDeployment
+      steps:
+        - task: UpdateServiceNowChangeRequest@2
+          inputs:
+            ServiceNowConnection: 'ServiceNow PRD'
+            NewStatus: '3'
+            CloseCode: 'successful'
+            CloseNotes: 'Deployment successful'
+            otherParameters: '{"u_close_code":"successful","u_close_notes":"all good"}'
+        - task: Delay@1
+          displayName: 'Delay by 1 minutes for ServiceNow workflow'
+          inputs:
+            delayForMinutes: 1
+        - task: UpdateServiceNowChangeRequest@2
+          inputs:
+            ServiceNowConnection: 'ServiceNow PRD'
+            NewStatus: '3'
+            CloseCode: 'successful'
+            CloseNotes: 'Deployment successful'
+            otherParameters: '{"u_close_code":"successful","u_close_notes":"all good"}'

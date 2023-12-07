@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  A Stack that creates an S3 bucket for ADOGoldenAMI-LINUX-Rotate-AmiIds-Secret Lambda code
+
+#add something
+Parameters:
+  environment:
+    Type: String
+    Description: 'devops-dev, devops-int and devops-prd'
+  Region:
+    Type: String
+    Description: 'Region this is being deployed to us-west-2 or us-east-1'
+  S3BucketName:
+    Type: String
+    Description: 'Bucket for DOGoldenAMI-LINUX-Rotate-AmiIds-Secret Lambda code'
+
+Mappings:
+  AccountToParams:
+    "308701666906":
+      environment: devops-dev
+    "731887935032":
+      environment: devops-int
+    "875633491806":
+      environment: devops-prd
+
+Resources:
+  AMIidsBucket:
+    Type: 'AWS::S3::Bucket'
+    Description: Bucket for DOGoldenAMI-LINUX-Rotate-AmiIds-Secret Lambda code
+    Properties:
+      BucketName: !Sub "${S3BucketName}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+  AMIidsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AMIidsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: "Deny"
+            Principal: "*"
+            Action: 
+            - s3:DeleteBucketPolicy
+            - s3:PutBucketPolicy
+            Resource:
+            - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}"
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalARN:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ADOAutomation/buildServer/buildAgent*'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-administrator'
+
+          - Effect: "Deny"
+            Principal: "*"
+            Action: 
+            - s3:GetObject
+            - s3:ListBucket
+            Resource:
+            - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}/*"
+            - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}"
+            Condition:
+              ArnNotLike:
+                aws:PrincipalARN:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ADOAutomation/buildServer/buildAgent*'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-devops-supportrole-modify'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-administrator'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/devops-linux2ami-LambdaStack-AMIidsRole-*'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-fsdev03'
+
+          - Effect: "Deny"
+            Principal: "*"
+            Action: 
+            - s3:PutObject
+            - s3:DeleteObject
+            Resource:
+            - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}/*"
+            - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}"
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalARN:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ADOAutomation/buildServer/buildAgent*'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-devops-supportrole-modify'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-administrator'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cld-fsdev03'
+
+Outputs:
+  environment:
+    Description: environment this resource is deployed to
+    Value: !FindInMap [AccountToParams, !Ref "AWS::AccountId", environment]
+  BucketNameRegion: 
+    Description: Name of this s3 Bucket + the region
+    Value: !Sub "${S3BucketName}-${AWS::Region}"

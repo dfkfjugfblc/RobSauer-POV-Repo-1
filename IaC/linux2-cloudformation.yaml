@@ -1,0 +1,245 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  A Stack that creates a Linux2-AMI & Role/Instance Profile for building LINUX2 ADO-BuildServers
+#####
+#####@@
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "EC2 Configuration"
+        Parameters:
+          - InstanceName
+          - osVersion
+          - LatestAmiId
+          - InstanceType
+          - terminationProtection
+          - CFStackName
+          - kmskeyid
+      -
+        Label:
+          default: "EC2 Tags"
+        Parameters:
+          - Description
+          - appl
+          - patchGroup
+          - schedule
+          - supportedby
+          - supportchannel
+          - drimpact
+          - portfolio
+
+    ParameterLabels:
+      InstanceName:
+        default: "Name"
+      osVersion:
+        default: "OS Version"
+      LatestAmiId:
+        default: "AMI ID"
+      Description:
+        default: "Usage/App Description"
+      InstanceType:
+        default: "Instance Type"
+      appl:
+        default: "Application Tag (appl)"
+      patchGroup:
+        default: "Patch Group"
+      schedule:
+        default: "Schedule"
+      supportedby:
+        default: "Supported By"
+      supportchannel:
+        default: "Support Channel"
+      drimpact:
+        default: "DR Impact"
+      portfolio:
+        default: "Portfolio"
+      terminationProtection:
+        default: "TerminationProtection"
+      CFStackName:
+        default: "CloudFormation Stack Name"
+
+Parameters:
+  InstanceName:
+    Description: "Enter a name for this instance, up to 15 chars total"
+    Type: String
+    Default: "LINUX2AMI01"
+  osVersion:
+    Type: String
+    Description: "Select the desired operating system for this EC2 instance. (Default. AmazonLinux2)"
+    Default: AmazonLinux2
+  LatestAmiId:
+    Description: AMI ID pointer in AWS Systems Manager Parameter Store. Default value points to the latest Amazon Linux 2 AMI ID
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  InstanceType:
+    Description: EC2 instance Type
+    Type: String
+    Default: t3a.small
+  Description:
+    Description: "Description of the resource"
+    Type: String
+    Default: "AWS LINUX2 Ec2 instance used to create a hardened Symetra-Linux2 AMI"
+  appl:
+    Description: "Provide application code for appl tag"
+    Type: String
+    Default: devops
+  patchGroup:
+    Type: String
+    Description: 'Select when to apply OS patches to this EC2 instance. (excluded)'
+    Default: excluded
+  schedule:
+    Description: 'Select the on/off hours for this EC2 instance. (24hrs - so you can build an instance at anytime since it deletes in 10 minutes)'
+    Type: String
+    Default: 24hrs
+  supportedby:
+    Description: Managed by 2nd Watch or by Symetra
+    Type: String
+    Default: sya
+  supportchannel:
+    Description: 'Notification for incidents or outages, or critical events requiring attention.'
+    Type: String
+    Default: 'mail:doauto@symetra.com'
+  drimpact:
+    Description: "This describes the business impact if this service were to go down (foundational, missioncritical, essential, base, supporting, insignificant)"
+    Type: String
+    Default: ephemeral
+  CFStackName:
+    Description: Name of the CloudFormation stack
+    Type: String
+  kmskeyid:
+    Description: KMS Key ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /Infrastructure/GoldenAMI-ADO/kmskeyid
+  portfolio:
+    Description: "Portfolio ID's for cost showback"
+    Type: String
+    Default: portfolio-id12
+  terminationProtection:
+    Description: "If True the EC2 instance will be termination protected to prevent accidental deletions"
+    Type: String
+    Default: false
+
+Mappings:
+  AccountToParams:
+    "308701666906":
+      Environment: devops-dev
+      key: "SYA-DevOps-Dev-EC2Instance-Keypair"
+      shortname: "devops-dev"
+    "731887935032":
+      Environment: devops-int
+      key: "SYA-DevOps-Int-EC2Instance-Keypair"
+      shortname: "devops-int"
+    "875633491806":
+      Environment: devops-prd
+      key: "SYA-DevOps-Prd-EC2Instance-Keypair"
+      shortname: "devops-prd"
+
+Resources:
+  EC2Instance: 
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: !FindInMap [AccountToParams, !Ref "AWS::AccountId", key]
+      ImageId: !Ref LatestAmiId 
+      DisableApiTermination: !Ref terminationProtection
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: EC2ExecutionRole
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          VolumeType: gp3
+          VolumeSize: 30
+          KmsKeyId: !Ref kmskeyid
+          Encrypted: true
+      SecurityGroupIds:
+      - !ImportValue VPC-CorpSecurityGroupID
+      SubnetId: !ImportValue VPC-PrivateSubnet1ID
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo yum install jq -y
+
+          ##### INSTALL AGENTS #####
+          # OpsRamp Agent Install
+          # aws s3 cp s3://ce-ec2-stagingbits/linux/OpsRamp_deployAgent.py OpsRamp_deployAgent.py
+          # sudo python ./OpsRamp_deployAgent.py -i silent
+          sudo aws s3 cp s3://entsvcs-ec2staging-bits/Opsramp_Prod/Opsramp_Prod/Linux/AMD/64/opsramp-agent-15.0.0-1.x86_64.rpm opsramp-agent-15.0.0-1.x86_64.rpm
+          sudo rpm opsramp-agent-15.0.0-1.x86_64.rpm -i 
+          sudo /opt/opsramp/agent/bin/configure -K ZsgmxDQXRfu3rG4sc4j2YgGapV558Jqj -S 2JFUdNFXbvG79b6ZNn9RwY2vfHJXMHqnBrPtdhAyqjWhpHfBFnrxvDK6GcKzWnez -s symetra.api.opsramp.com
+          sudo rm opsramp-agent-15.0.0-1.x86_64.rpm
+
+          #AlertLogic Agent Install
+          aws s3 cp s3://ce-ec2-stagingbits/linux/AlertLogic_deployAgent.sh AlertLogic_deployAgent.sh
+          chmod +x AlertLogic_deployAgent.sh
+          ./AlertLogic_deployAgent.sh
+          rm AlertLogic_deployAgent.sh
+
+          #TrendMicro Agent Install
+          aws s3 cp s3://ce-ec2-stagingbits/linux/TrendMicro_deployAgent.sh TrendMicro_deployAgent.sh
+          chmod +x TrendMicro_deployAgent.sh
+          sudo ./TrendMicro_deployAgent.sh
+          rm TrendMicro_deployAgent.sh
+
+          #Clear UserData
+          sudo rm -rf /var/lib/cloud/*
+
+          #CreateAMI
+          ec2InstanceId=$(ec2-metadata --instance-id | cut -d " " -f 2)
+          ec2AmiId=$(ec2-metadata --ami-id | cut -d " " -f 2)
+          newAmiId=$(aws ec2 create-image --instance-id $ec2InstanceId --name "Amazon-Linux2-GoldenAMI-"$(date +"%D"-"%H""%M""%Z") --region us-west-2 --no-reboot | jq '.ImageId' | sed -e 's/^"//' -e 's/"$//')
+          aws ec2 create-tags --resources $newAmiId --tags Key=build,Value=Amazon-Linux2 Key=type,Value=base Key=Name,Value=SYA-Approved-ADOGoldenAMI --region us-west-2
+          sleep 5m
+
+          ### Rotate AMI ID's ###
+          aws lambda invoke --function-name devops-RotateLinuxAMIidsLambda --invocation-type Event --payload '{ "image_id": "'"$newAmiId"'", "aws_image_id": "'"$ec2AmiId"'" }' --region us-west-2 response.txt
+          sleep 1m
+
+          ######## Now delete the stack & instance
+          aws cloudformation delete-stack --stack-name Create-devops-Linux2-AMI --region us-west-2
+
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+        - Key: appl
+          Value: !Ref appl
+        - Key: portfolio
+          Value: !Ref portfolio
+        - Key: environment
+          Value: !FindInMap [AccountToParams, !Ref "AWS::AccountId", Environment]
+        - Key: region
+          Value: !Ref AWS::Region
+        - Key: supportchannel
+          Value: !Ref supportchannel
+        - Key: supportedby
+          Value: !Ref supportedby
+        - Key: schedule
+          Value: !Ref schedule
+        - Key: dr_impact
+          Value: !Ref drimpact
+        - Key: Patch Group
+          Value: !Ref patchGroup
+
+Outputs:
+  InstanceIP:
+    Description: IP Address of the Linux EC2 Instance
+    Value: !Sub '${EC2Instance.PrivateIp}'
+  InstanceID:
+    Description: Instance ID of the Linux EC2
+    Value: !Ref EC2Instance
+  InstanceName:
+    Description: Name of the Linux EC2 Instance
+    Value: !Ref InstanceName
+  CFStackName:
+    Description: Name of the CloudFormation template
+    Value: !Ref CFStackName
+  kmskeyid:
+    Description: The KMS key used for this account
+    Value: !Ref kmskeyid
+  Environment:
+    Description: Environment this is resource is deployed to
+    Value: !FindInMap [AccountToParams, !Ref "AWS::AccountId", Environment]
+  AWSRegion:
+    Description: Region
+    Value: !Ref "AWS::Region"

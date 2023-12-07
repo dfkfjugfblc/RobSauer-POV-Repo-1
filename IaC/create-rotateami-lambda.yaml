@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  A Stack that creates ADOGoldenAMI-LINUX-Rotate-AmiIds-Secret Lambda Function & Service Role
+
+Parameters:
+  BuildId:
+    Description: "The ID of the build from Azure DevOps. This helps to ensure unique file names for the lambdas in the S3 buckets."
+    Type: String
+  environment:
+    Type: String
+    Description: 'devops-dev, devops-int and devops-prd'
+  S3BucketName:
+    Type: String
+    Description: 'AMIids-code bucket'
+  kmskeyid:
+    Type: String
+    Description: 'KMS key'
+
+Mappings:
+  AccountToParams:
+    "308701666906":
+      environment: devops-dev
+    "731887935032":
+      environment: devops-int
+    "875633491806":
+      environment: devops-prd
+
+
+Resources:
+  AMIidsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/admin/boundaries/swiftcloud/RoleBoundaryExecutionSwiftCloud'
+      Description: Role to create AMIs
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - sns.amazonaws.com
+                - lambda.amazonaws.com
+                - ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/devops/lambda/"
+      Policies:
+        - PolicyName: "devops-RotateLinuxAMIidsLambda-executionPolicy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: "Allow"
+                Action: 
+                - s3:GetObject
+                - s3:PutObject
+                - s3:ListBucket
+                Resource:
+                - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}/*"
+                - !Sub "arn:aws:s3:::${S3BucketName}-${AWS::Region}"
+              - Effect: "Allow"
+                Action: 
+                - secretsmanager:GetResourcePolicy
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+                - secretsmanager:ListSecretVersionIds
+                - secretsmanager:ListSecrets
+                - secretsmanager:PutSecretValue
+                Resource:
+                ## devops-dev
+                - !Sub "arn:aws:secretsmanager:${AWS::Region}:308701666906:secret:devops-ami/linux2-Us4UJL"
+                - !Sub "arn:aws:secretsmanager:${AWS::Region}:308701666906:secret:devops-ami/al2023-ln3pim"
+                ## devops-int
+                - !Sub "arn:aws:secretsmanager:${AWS::Region}:731887935032:secret:devops-ami/linux2-8gdEXV"
+                - !Sub "arn:aws:secretsmanager:${AWS::Region}:731887935032:secret:devops-ami/al2023-zuwKaw"
+                ## devops-prd
+                - !Sub "arn:aws:secretsmanager:${AWS::Region}:875633491806:secret:devops-ami/linux2-oCkpTc"
+                - !Sub "arn:aws:secretsmanager:${AWS::Region}:875633491806:secret:devops-ami/al2023-wJr5PE"
+              - Effect: "Allow"
+                Action: 
+                - ec2:ModifyImageAttribute
+                Resource:
+                - "*"
+              - Effect: "Allow"
+                Action: 
+                - "kms:GenerateDataKey"
+                - "kms:Decrypt"
+                - "kms:Encrypt"
+                - "kms:ReEncryptTo"
+                - "kms:DescribeKey"
+                - "kms:CreateGrant"
+                - "kms:GenerateDataKeyWithoutPlaintext"
+                Resource:
+                - "__kmskeyid__"
+              - Effect: "Allow"
+                Action: 
+                - "lambda:InvokeFunction"
+                Resource:
+                - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:devops-RotateLinuxAMIidsLambda"
+        - PolicyName: "allow-SNS"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: "Allow"
+                Action: 
+                - SNS:Publish
+                Resource:
+                - !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:devops-notifications"
+
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+        - "arn:aws:iam::aws:policy/AmazonInspectorFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+      Tags:
+        - Key: Name
+          Value: AMIidsRole
+        - Key: appl
+          Value: devops
+        - Key: portfolio
+          Value: portfolio-id12
+        - Key: supportchannel
+          Value: mail:doauto@symetra.com
+        - Key: supportedby
+          Value: sya
+
+  AMIinstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AMIidsRole]
+
+# Will need to update EC2ExecutionRole.yaml if role name is changed
+  RotateLinuxAMIidsLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: 'Lambda function to rotate LINUX based SwiftCloud account AMIids'
+      FunctionName: 'devops-RotateLinuxAMIidsLambda'
+      environment:
+        Variables:
+          ENVIRONMENT: !Ref environment
+      Handler: 'lambda_function.lambda_handler'
+      Runtime: python3.8
+      Role: !GetAtt 'AMIidsRole.Arn'
+      Timeout: 600
+      CodeUri:
+        Bucket: !Sub "${S3BucketName}-${AWS::Region}"
+        Key: !Sub "${S3BucketName}-${BuildId}.zip"
+      Tags:
+        Name: "RotateLinuxAMIidsLambda"
+        portfolio: "portfolio-id12"
+        appl: "devops"
+        supportedby: "sya"
+        supportchannel: "mail:doauto@symetra.com"
+
+Outputs:
+  RoleName: 
+    Description: Name of Created IAM Role
+    Value: !Ref AMIidsRole
+  RoleArn: 
+    Description: Arn of Created Role
+    Value: !GetAtt AMIidsRole.Arn
+  environment:
+    Description: Environemnt this resource is deployed to
+    Value: !FindInMap [AccountToParams, !Ref "AWS::AccountId", environment]
+  BucketName: 
+    Description: Name of Bucket + the region
+    Value: !Sub "${S3BucketName}-${AWS::Region}"
+  AMIinstanceProfile: 
+    Description: Name of instance profile
+    Value: !Ref AMIinstanceProfile
+    Export: 
+      Name: LambdaAmiInstanceProfile
