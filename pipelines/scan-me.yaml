@@ -7,8 +7,6 @@ pool:
 
 steps:
 
-
-
   - task: ArchiveFiles@2
     displayName: 'Archive $(Build.artifactstagingdirectory)'
 
@@ -22,8 +20,6 @@ steps:
       importResults: true
       failBuildOnPolicyFail: true
       maximumWaitTime: '360'
-
-
 
 # container: checkmarx/kics:debian
 # steps:
